@@ -33,7 +33,14 @@ jobs:
       run: |
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
         sudo -E apt-get -qq update
-        sudo -E apt-get -qq install -y ack antlr3 asciidoc autopoint bzip2 ccache cmake cpio device-tree-compiler fastjar gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python3-pyelftools qemu-utils scons texinfo uglifyjs upx-ucl xmlto xxd zlib1g-dev
+        sudo -E apt-get -qq install -y \
+          ack antlr3 asciidoc autopoint bzip2 ccache cmake cpio \
+          device-tree-compiler fastjar gperf haveged help2man intltool \
+          libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev \
+          libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev \
+          libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp \
+          ninja-build p7zip p7zip-full patch pkgconf python3-pyelftools \
+          qemu-utils scons texinfo uglifyjs upx-ucl xmlto xxd zlib1g-dev
         sudo -E apt-get -qq autoremove --purge
         sudo -E apt-get -qq clean
         sudo timedatectl set-timezone "$TZ"
@@ -48,43 +55,71 @@ jobs:
         ln -sf /workdir/openwrt "$GITHUB_WORKSPACE/openwrt"
         echo "✅ 分支: $(git branch --show-current)"
 
-    - name: 载入平台文件
+    - name: 载入平台文件（B60 适配）
       run: |
+        # 确保目标目录存在
         mkdir -p openwrt/target/linux/amlogic
+        
+        # 拷贝 meson subtarget
         cp -rf target/linux/meson openwrt/target/linux/amlogic/meson
-        echo "✅ meson → amlogic/meson"
-        ls openwrt/target/linux/amlogic/meson/kernel-* || exit 1
+        
+        # 验证关键文件存在
+        for f in Makefile config-6.12 dts; do
+          if [ ! -e "openwrt/target/linux/amlogic/meson/$f" ]; then
+            echo "❌ 缺少 amlogic/meson/$f"
+            ls openwrt/target/linux/amlogic/meson/ || true
+            exit 1
+          fi
+        done
+        
+        echo "✅ 平台文件已载入"
+        ls openwrt/target/linux/amlogic/meson/
 
-    - name: 自定义 feeds 和 op1
+    - name: 自定义 feeds (op1)
       run: |
         [ -e feeds.conf.default ] && mv feeds.conf.default openwrt/feeds.conf.default
         chmod +x "$DIY_P1_SH"
         cd openwrt
         "$GITHUB_WORKSPACE/$DIY_P1_SH"
 
-    - name: 更新 feeds
-      run: cd openwrt && ./scripts/feeds update -a
-
-    - name: 清理 feeds (op3)
-      run: |
-        chmod +x "$DIY_P3_SH"
-        cd openwrt
-        "$GITHUB_WORKSPACE/$DIY_P3_SH"
-
-    - name: 重更新并安装
+    - name: 更新并安装 feeds（只做一次）
       run: |
         cd openwrt
         ./scripts/feeds update -a
         ./scripts/feeds install -a
+        echo "✅ feeds 更新并安装完成"
 
     - name: 载入配置和 op2
       run: |
+        # 拷贝自定义文件
         [ -e files ] && mv files openwrt/files
-        [ -e "$CONFIG_FILE" ] && mv "$CONFIG_FILE" openwrt/.config
+        
+        # 拷贝 .config（如果存在）
+        if [ -e "$CONFIG_FILE" ]; then
+          mv "$CONFIG_FILE" openwrt/.config
+          echo "✅ .config 已载入"
+        else
+          echo "⚠️ 未找到 $CONFIG_FILE，将使用默认配置"
+          touch openwrt/.config
+        fi
+        
+        # 执行 op2
         chmod +x "$DIY_P2_SH"
         cd openwrt
         "$GITHUB_WORKSPACE/$DIY_P2_SH"
+        
+        # 生成最终配置
         make defconfig
+        echo "✅ defconfig 完成"
+        
+        # 显示关键配置
+        grep -E "CONFIG_TARGET_|CONFIG_LINUX_|CONFIG_PACKAGE_luci" .config | head -20
+
+    - name: 编译前检查 (op3)
+      run: |
+        chmod +x "$DIY_P3_SH"
+        cd openwrt
+        "$GITHUB_WORKSPACE/$DIY_P3_SH"
 
     - name: 预检
       run: |
@@ -96,6 +131,7 @@ jobs:
         cd openwrt
         make download -j8
         find dl -size -1024c -exec rm -f {} \;
+        echo "✅ 下载完成，dl/ 大小: $(du -sh dl | cut -f1)"
 
     - name: SSH 调试
       uses: P3TERX/ssh2actions@v1.0.0
@@ -108,23 +144,40 @@ jobs:
       id: compile
       run: |
         cd openwrt
+        echo "开始编译，时间: $(date)"
         make -j$(nproc) V=s || make -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
+        echo "编译结束，时间: $(date)"
 
     - name: 生成烧录镜像
       if: steps.compile.outputs.status == 'success'
       run: |
-        chmod +x "$GITHUB_WORKSPACE/Scripts/convert1.sh"
-        "$GITHUB_WORKSPACE/Scripts/convert1.sh"
+        if [ -f "$GITHUB_WORKSPACE/Scripts/convert1.sh" ]; then
+          chmod +x "$GITHUB_WORKSPACE/Scripts/convert1.sh"
+          "$GITHUB_WORKSPACE/Scripts/convert1.sh"
+          echo "✅ 烧录镜像已生成"
+        else
+          echo "⚠️ convert1.sh 不存在，跳过"
+        fi
 
     - name: 整理产物
       if: steps.compile.outputs.status == 'success'
       run: |
-        cd openwrt/bin/targets/*/*
+        FIRMWARE_DIR="openwrt/bin/targets/amlogic/meson"
+        if [ ! -d "$FIRMWARE_DIR" ]; then
+          echo "❌ 产物目录不存在: $FIRMWARE_DIR"
+          echo "可用的产物目录："
+          find openwrt/bin/targets/ -type d | head -10
+          exit 1
+        fi
+        
+        cd "$FIRMWARE_DIR"
         rm -rf packages
         find . -type f -size 0 -delete
         sha256sum *.img *.gz *.xz 2>/dev/null > sha256sums.txt || true
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+        echo "✅ 产物目录: $PWD"
+        ls -lh
 
     - name: 时间标签
       if: steps.compile.outputs.status == 'success'
