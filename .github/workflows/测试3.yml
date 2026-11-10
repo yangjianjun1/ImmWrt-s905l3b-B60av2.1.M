@@ -1,6 +1,7 @@
-name: 构建固件
+name: 编译 ImmortalWrt - B60 (S905L3B)
 
 on:
+  repository_dispatch:
   workflow_dispatch:
     inputs:
       ssh:
@@ -12,20 +13,19 @@ env:
   REPO_URL: https://github.com/immortalwrt/immortalwrt.git
   REPO_BRANCH: master
   CONFIG_FILE: B60av2.1.M.config
-  DIY_P1_SH: op1.sh
-  DIY_P2_SH: op2.sh
-  DIY_P3_SH: op3.sh
+  # DIY_P1_SH: op1.sh    # 玩客云残留，已禁用
+  # DIY_P2_SH: op2.sh
+  # DIY_P3_SH: op3.sh
   UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 360
-
     steps:
-    - name: Checkout
-      uses: actions/checkout@main
+
+    - name: 检出代码
+      uses: actions/checkout@v4
 
     - name: 初始化编译环境
       env:
@@ -33,163 +33,103 @@ jobs:
       run: |
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
         sudo -E apt-get -qq update
-        sudo -E apt-get -qq install -y \
-          ack antlr3 asciidoc autopoint bzip2 ccache cmake cpio \
-          device-tree-compiler fastjar gperf haveged help2man intltool \
-          libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev \
-          libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev \
-          libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp \
-          ninja-build p7zip p7zip-full patch pkgconf python3-pyelftools \
-          qemu-utils scons texinfo uglifyjs upx-ucl xmlto xxd zlib1g-dev
+        sudo -E apt-get -qq install -y $(curl -fsSL https://raw.githubusercontent.com/immortalwrt/immortalwrt/master/scripts/feeds-setup.sh | grep -oP 'apt-get install -y \K.*' | head -1 || echo "build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-setuptools rsync swig unzip zlib1g-dev file wget")
         sudo -E apt-get -qq autoremove --purge
         sudo -E apt-get -qq clean
         sudo timedatectl set-timezone "$TZ"
-        sudo mkdir -p /workdir
-        sudo chown $USER:$GROUPS /workdir
 
-    - name: 拉取源码
-      working-directory: /workdir
+    - name: 克隆 ImmortalWrt 源码
       run: |
-        git clone -b "$REPO_BRANCH" --depth 1 "$REPO_URL" openwrt
+        git clone --depth=1 $REPO_URL -b $REPO_BRANCH openwrt
         cd openwrt
-        ln -sf /workdir/openwrt "$GITHUB_WORKSPACE/openwrt"
-        echo "✅ 分支: $(git branch --show-current)"
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
 
-    - name: 载入平台文件（B60 适配）
+    - name: 载入平台文件 (amlogic/meson)
       run: |
-        # 确保目标目录存在
-        mkdir -p openwrt/target/linux/amlogic
-        
-        # 拷贝 meson subtarget
-        cp -rf target/linux/meson openwrt/target/linux/amlogic/meson
-        
-        # 验证关键文件存在
-        for f in Makefile config-6.12 dts; do
+        echo "📁 检查 B60 平台目录结构..."
+
+        # 确认 amlogic 板级目录
+        if [ ! -d "target/linux/amlogic" ]; then
+          echo "📂 创建 amlogic 板级目录..."
+          mkdir -p openwrt/target/linux/amlogic
+        fi
+
+        # 拷贝 amlogic BOARD Makefile（如果存在）
+        if [ -f "target/linux/amlogic/Makefile" ]; then
+          cp target/linux/amlogic/Makefile openwrt/target/linux/amlogic/Makefile
+        fi
+
+        # 拷贝 meson 子目标
+        if [ ! -d "target/linux/amlogic/meson" ]; then
+          echo "❌ 仓库中缺少 target/linux/amlogic/meson 目录"
+          exit 1
+        fi
+
+        cp -rf target/linux/amlogic/meson openwrt/target/linux/amlogic/meson
+
+        # 验证关键文件
+        for f in Makefile config-6.12; do
           if [ ! -e "openwrt/target/linux/amlogic/meson/$f" ]; then
             echo "❌ 缺少 amlogic/meson/$f"
             ls openwrt/target/linux/amlogic/meson/ || true
             exit 1
           fi
         done
-        
-        echo "✅ 平台文件已载入"
-        ls openwrt/target/linux/amlogic/meson/
 
-    - name: 自定义 feeds (op1)
-      run: |
-        [ -e feeds.conf.default ] && mv feeds.conf.default openwrt/feeds.conf.default
-        chmod +x "$DIY_P1_SH"
-        cd openwrt
-        "$GITHUB_WORKSPACE/$DIY_P1_SH"
-
-    - name: 更新并安装 feeds（只做一次）
-      run: |
-        cd openwrt
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
-        echo "✅ feeds 更新并安装完成"
-
-    - name: 载入配置和 op2
-      run: |
-        # 拷贝自定义文件
-        [ -e files ] && mv files openwrt/files
-        
-        # 拷贝 .config（如果存在）
-        if [ -e "$CONFIG_FILE" ]; then
-          mv "$CONFIG_FILE" openwrt/.config
-          echo "✅ .config 已载入"
-        else
-          echo "⚠️ 未找到 $CONFIG_FILE，将使用默认配置"
-          touch openwrt/.config
-        fi
-        
-        # 执行 op2
-        chmod +x "$DIY_P2_SH"
-        cd openwrt
-        "$GITHUB_WORKSPACE/$DIY_P2_SH"
-        
-        # 生成最终配置
-        make defconfig
-        echo "✅ defconfig 完成"
-        
-        # 显示关键配置
-        grep -E "CONFIG_TARGET_|CONFIG_LINUX_|CONFIG_PACKAGE_luci" .config | head -20
-
-    - name: 编译前检查 (op3)
-      run: |
-        chmod +x "$DIY_P3_SH"
-        cd openwrt
-        "$GITHUB_WORKSPACE/$DIY_P3_SH"
-
-    - name: 预检
-      run: |
-        cd openwrt
-        make prereq V=s
-
-    - name: 预下载
-      run: |
-        cd openwrt
-        make download -j8
-        find dl -size -1024c -exec rm -f {} \;
-        echo "✅ 下载完成，dl/ 大小: $(du -sh dl | cut -f1)"
-
-    - name: SSH 调试
-      uses: P3TERX/ssh2actions@v1.0.0
-      if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh != 'false') || contains(github.event.action, 'ssh')
-      env:
-        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-
-    - name: 编译
-      id: compile
-      run: |
-        cd openwrt
-        echo "开始编译，时间: $(date)"
-        make -j$(nproc) V=s || make -j1 V=s
-        echo "status=success" >> $GITHUB_OUTPUT
-        echo "编译结束，时间: $(date)"
-
-    - name: 生成烧录镜像
-      if: steps.compile.outputs.status == 'success'
-      run: |
-        if [ -f "$GITHUB_WORKSPACE/Scripts/convert1.sh" ]; then
-          chmod +x "$GITHUB_WORKSPACE/Scripts/convert1.sh"
-          "$GITHUB_WORKSPACE/Scripts/convert1.sh"
-          echo "✅ 烧录镜像已生成"
-        else
-          echo "⚠️ convert1.sh 不存在，跳过"
-        fi
-
-    - name: 整理产物
-      if: steps.compile.outputs.status == 'success'
-      run: |
-        FIRMWARE_DIR="openwrt/bin/targets/amlogic/meson"
-        if [ ! -d "$FIRMWARE_DIR" ]; then
-          echo "❌ 产物目录不存在: $FIRMWARE_DIR"
-          echo "可用的产物目录："
-          find openwrt/bin/targets/ -type d | head -10
+        # 验证 DTS 文件存在
+        DTS_PATH="openwrt/target/linux/amlogic/meson/files-6.12/arch/arm64/boot/dts/amlogic"
+        if [ ! -d "$DTS_PATH" ] || [ -z "$(ls $DTS_PATH/*.dts 2>/dev/null)" ]; then
+          echo "❌ 缺少 DTS 文件，期望路径: $DTS_PATH"
+          ls -R openwrt/target/linux/amlogic/meson/files-6.12/ 2>/dev/null || true
           exit 1
         fi
-        
-        cd "$FIRMWARE_DIR"
-        rm -rf packages
-        find . -type f -size 0 -delete
-        sha256sum *.img *.gz *.xz 2>/dev/null > sha256sums.txt || true
-        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-        echo "✅ 产物目录: $PWD"
-        ls -lh
 
-    - name: 时间标签
-      if: steps.compile.outputs.status == 'success'
-      run: echo "FILE_DATE=$(TZ='Asia/Shanghai' date +'%Y.%m.%d-%H%M')" >> $GITHUB_ENV
+        echo "✅ 平台文件验证通过"
+        echo "📋 DTS 文件列表:"
+        ls $DTS_PATH/*.dts
+        echo "📋 meson 目录内容:"
+        ls openwrt/target/linux/amlogic/meson/
 
-    - name: 上传 Release
-      uses: softprops/action-gh-release@v2.0.8
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
+    - name: 加载 B60 配置文件
+      run: |
+        if [ ! -f "$CONFIG_FILE" ]; then
+          echo "❌ 仓库根目录缺少 $CONFIG_FILE"
+          echo "当前文件列表:"
+          ls -la
+          exit 1
+        fi
+        cp $CONFIG_FILE openwrt/.config
+        echo "✅ 已载入 $CONFIG_FILE"
+        cd openwrt
+        make defconfig
+
+    - name: 下载包源码
+      run: |
+        cd openwrt
+        make download -j$(nproc)
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: 编译固件
+      run: |
+        cd openwrt
+        echo "开始编译，使用 $(nproc) 线程..."
+        make -j$(nproc) V=s
+        echo "✅ 编译完成"
+
+    - name: 整理产物
+      run: |
+        cd openwrt
+        mkdir -p ../artifacts
+        cp -r bin/targets/amlogic/meson/* ../artifacts/ 2>/dev/null || true
+        echo "📦 产物列表:"
+        ls -lh ../artifacts/ || echo "未找到产物"
+
+    - name: 发布 Release
+      uses: softprops/action-gh-release@v1
+      if: env.UPLOAD_RELEASE == 'true'
+      with:
+        tag_name: B60-${{ github.run_number }}
+        files: artifacts/*
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: Firmware-${{ env.FILE_DATE }}
-        name: ImmortalWrt-B60-${{ env.FILE_DATE }}
-        files: ${{ env.FIRMWARE }}/*
-        fail_on_unmatched_files: false
