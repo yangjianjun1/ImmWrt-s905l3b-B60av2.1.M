@@ -1,98 +1,73 @@
 #!/bin/bash
 set -euo pipefail
 
-echo "::group::Build eMMC Burn image"
+echo "::group::🔄 B60 固件转换 - U 盘启动包"
 
-# 依赖
-sudo apt update -y
-sudo apt install -y android-sdk-libsparse-utils xz-utils rsync gzip
+SRC_DIR="openwrt/bin/targets/amlogic/meson"
+OUT_DIR="artifacts"
+mkdir -p "$OUT_DIR"
 
-# 下载工具
-ver="v0.3.1"
-curl --retry 3 -L -o ./AmlImg "https://github.com/lxiaya/AmlImg/releases/download/$ver/AmlImg_${ver}_linux_amd64"
-chmod +x ./AmlImg
+# ===== 1. 找镜像 =====
+factory_gz=$(find "$SRC_DIR" -name "*factory*.img.gz" | head -n1)
+sysupgrade_gz=$(find "$SRC_DIR" -name "*sysupgrade*.img.gz" | head -n1)
 
-curl --retry 3 -L -o ./uboot.img "https://github.com/lxiaya/u-boot-onecloud/releases/download/build-20230901-0443/eMMC.burn.img"
-rm -rf burn
-./AmlImg unpack ./uboot.img burn/
+if [ -z "$factory_gz" ]; then
+  echo "⚠️ 未找到 factory 镜像，尝试用 sysupgrade 替代..."
+  if [ -z "$sysupgrade_gz" ]; then
+    echo "❌ 未找到任何 .img.gz 产物"
+    echo "📂 当前产物目录内容："
+    ls -R "$SRC_DIR/" 2>/dev/null || true
+    exit 1
+  fi
+  factory_gz="$sysupgrade_gz"
+fi
 
-# 解压，找原始 img
-gunzip -f openwrt/bin/targets/*/*/*.gz || true
-diskimg=$(find openwrt/bin/targets -name "*.img" | head -n1)
-orig_dir=$(dirname "$diskimg")
+echo "📂 源镜像：$factory_gz"
 
-echo "✅ 源镜像：$diskimg"
+# ===== 2. 解压 =====
+gunzip -f "$factory_gz"
+factory_img="${factory_gz%.gz}"
+echo "✅ 解压完成：$factory_img"
 
-# ===== loop 挂载 =====
-loop=$(sudo losetup --find --show --partscan "$diskimg")
-for i in $(seq 1 10); do
-    [ -e "${loop}p1" ] && [ -e "${loop}p2" ] && break
-    sudo partprobe "$loop" 2>/dev/null || true
-    sleep 1
-done
+# ===== 3. 验证镜像（可选，方便调试）=====
+loop=$(sudo losetup --find --show --partscan "$factory_img" 2>/dev/null || true)
+if [ -n "$loop" ]; then
+  echo "📋 镜像分区信息："
+  sudo fdisk -l "$loop" 2>/dev/null | head -20 || true
+  sudo losetup -d "$loop" 2>/dev/null || true
+fi
 
-cleanup() {
-    set +e
-    sudo umount ./temp_rootfs 2>/dev/null
-    sudo umount ./temp_newroot 2>/dev/null
-    sudo losetup -d "$loop" 2>/dev/null
-    sudo rm -rf ./temp_rootfs ./temp_newroot
-    set -e
-}
-trap cleanup EXIT
+# ===== 4. 输出 U 盘启动镜像 =====
+VERSION=$(date +%Y%m%d-%H%M)
+usb_img="$OUT_DIR/B60av2.1.M-usb-${VERSION}.img"
+cp "$factory_img" "$usb_img"
 
-mkdir -p temp_rootfs temp_newroot
-sudo mount "${loop}p2" temp_rootfs
+# 压缩版（方便下载）
+gzip -9 -c "$factory_img" > "$OUT_DIR/B60av2.1.M-usb-${VERSION}.img.gz"
 
-# ===== 按原 p2 分区实际大小创建新镜像（彻底解决空间不足）=====
-p2_size_bytes=$(sudo lsblk -b -n -o SIZE "${loop}p2")
-p2_size_mb=$(( p2_size_bytes / 1024 / 1024 ))
-echo "📏 原 p2 分区大小：${p2_size_mb}MB，按此大小创建新镜像"
+echo "✅ U 盘启动镜像：$usb_img"
+echo "✅ 压缩版：$OUT_DIR/B60av2.1.M-usb-${VERSION}.img.gz"
 
-new_rootfs_img="./openwrt_rootfs.ext4"
-# fallocate 秒级分配，比 dd 快得多
-fallocate -l "${p2_size_mb}M" "$new_rootfs_img"
-# -m 0 禁用 root 预留空间，多挤出 5%
-sudo mkfs.ext4 -q -m 0 "$new_rootfs_img"
-sudo mount "$new_rootfs_img" temp_newroot
+# ===== 5. 处理 sysupgrade =====
+if [ -n "$sysupgrade_gz" ] && [ "$sysupgrade_gz" != "$factory_gz" ]; then
+  gunzip -f "$sysupgrade_gz"
+  sysupgrade_img="${sysupgrade_gz%.gz}"
+  cp "$sysupgrade_img" "$OUT_DIR/B60av2.1.M-sysupgrade-${VERSION}.img"
+  gzip -9 -c "$sysupgrade_img" > "$OUT_DIR/B60av2.1.M-sysupgrade-${VERSION}.img.gz"
+  echo "✅ sysupgrade 镜像已生成"
+fi
 
-sudo rsync -a temp_rootfs/ temp_newroot/
-sudo umount temp_newroot
-sudo umount temp_rootfs
+# ===== 6. 校验和 =====
+cd "$OUT_DIR"
+sha256sum *.img *.img.gz > sha256sums 2>/dev/null || true
+cd ..
 
-sudo img2simg "${loop}p1" burn/boot.simg
-sudo img2simg "$new_rootfs_img" burn/rootfs.simg
+# ===== 7. 清理编译中间产物（只保留 artifacts/ 里的）=====
+rm -f "$factory_img"
+[ -n "$sysupgrade_gz" ] && [ "$sysupgrade_gz" != "$factory_gz" ] && rm -f "${sysupgrade_gz%.gz}" || true
 
-cat > burn/commands.txt <<'EOF'
-PARTITION:boot:sparse:boot.simg
-PARTITION:rootfs:sparse:rootfs.simg
-EOF
-
-# ===== 打包线刷包 → OneCloud-immwrt-2410.burn.img.xz =====
-burnimg="${orig_dir}/OneCloud-immwrt-2410.burn.img"
-./AmlImg pack "$burnimg" burn/
-xz -9 --threads=0 "$burnimg"
-echo "✅ 线刷包：${burnimg}.xz"
+echo ""
+echo "🎉 转换完成！最终产物："
+ls -lh "$OUT_DIR"/*.{img,img.gz,sha256sums} 2>/dev/null || ls -lh "$OUT_DIR"/
 
 echo "::endgroup::"
-
-# ===== 原始固件 → OneCloud-immwrt-2410.img.gz =====
-echo "::group::Pack original firmware"
-cp "$diskimg" "${orig_dir}/OneCloud-immwrt-2410.img"
-gzip -9 "${orig_dir}/OneCloud-immwrt-2410.img"
-echo "✅ 原始固件：${orig_dir}/OneCloud-immwrt-2410.img.gz"
-echo "::endgroup::"
-
-# ===== 严格清理：只留两个产物 =====
-sudo rm -f "$new_rootfs_img" ./AmlImg ./uboot.img
-rm -rf burn temp_rootfs temp_newroot
-
-# 删除原始编译产物（已被重命名版替代）
-rm -f "$diskimg"
-
-# 删除目录中可能残留的其他文件
-find "$orig_dir" -maxdepth 1 -name "*.img" -delete
-find "$orig_dir" -maxdepth 1 -name "*.gz" ! -name "OneCloud-immwrt-2410.img.gz" -delete
-
-echo "🎉 完成！最终产物："
-ls -lh "${orig_dir}/OneCloud-immwrt-2410".*
