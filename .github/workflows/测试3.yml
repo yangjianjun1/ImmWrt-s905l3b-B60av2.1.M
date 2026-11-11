@@ -1,37 +1,113 @@
-name: Build B60av21m USB
+name: Build ImmWrt B60av21m USB
 
 on:
   workflow_dispatch:
   push:
     branches: [main]
+    paths-ignore:
+      - 'README.md'
+      - 'LICENSE'
+  schedule:
+    - cron: '0 18 1 * *'   # 每月1号编译一次
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: 安装依赖
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 清理磁盘空间
+        run: |
+          sudo rm -rf /opt/hostedtoolcache /usr/share/dotnet /usr/local/lib/android
+          sudo apt clean
+          df -hT $PWD
+
+      - name: 安装编译依赖
         run: |
           sudo apt update
-          sudo apt install -y build-essential libncurses5-dev zlib1g-dev \
+          sudo apt install -y \
+            build-essential libncurses5-dev libncursesw5-dev zlib1g-dev \
             gawk git gettext libssl-dev xsltproc wget unzip python3 \
-            dosfstools e2fsprogs fdisk parted
+            python3-distutils python3-setuptools rsync
 
-      - name: 准备源码
+      - name: 安装打包工具
+        run: |
+          sudo apt install -y \
+            dosfstools e2fsprogs fdisk parted \
+            qemu-user-static binfmt-support
+
+      - name: 下载 u-boot（如仓库中不存在）
+        run: |
+          mkdir -p device/b60av21m/uboot
+          if [ ! -f device/b60av21m/uboot/u-boot.bin ]; then
+            echo "⬇️  下载 u-boot..."
+            wget https://github.com/hzyitc/u-boot-onecloud/releases/latest/download/uboot.img \
+                 -O device/b60av21m/uboot/u-boot.bin
+          fi
+
+      - name: 准备 dtb（如仓库中不存在）
+        run: |
+          mkdir -p device/b60av21m/dts
+          if [ -z "$(ls device/b60av21m/dts/*.dtb 2>/dev/null)" ]; then
+            echo "⚠️  device/b60av21m/dts/ 下没有 .dtb 文件"
+            echo "   首次编译将使用 onecloud 默认 dtb，后续请补充 B60 专用 dtb"
+          fi
+
+      - name: Step 1 - 准备源码和 feeds
         run: bash op1.sh
 
-      - name: 编译
+      - name: Step 2 - 编译 OpenWrt
         run: bash op2.sh
 
-      - name: 打包 U 盘镜像
-        run: bash pack-usb.sh
+      - name: Step 3 - 打包 U 盘镜像
+        run: sudo bash op3.sh
 
-      - name: 上传
+      - name: 重命名产物
+        run: |
+          cd output
+          for img in *.img; do
+            [ -f "$img" ] || continue
+            mv "$img" "ImmWrt-B60av21m-usb-$(date +%Y%m%d-%H%M).img"
+          done
+          ls -lh
+
+      - name: 上传 Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ImmWrt-B60av21m-usb
           path: output/*.img
+          retention-days: 30
+
+      - name: 发布 Release
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: ImmWrt B60av21m USB ${{ github.run_number }}
+          body: |
+            ## ImmWrt B60av21m U 盘启动镜像
+
+            - 编译时间: ${{ github.run_started_at }}
+            - 设备: 中兴 B60av2.1.M (S905L3B)
+            - 使用方式: 写入U盘后插盒启动
+
+            ### 使用方法
+            1. 下载 .img 文件
+            2. 写入U盘: `sudo dd if=*.img of=/dev/sdX bs=1M status=progress`
+            3. U盘插盒子靠近网口的USB口
+            4. 通电启动，蓝灯常亮即完成
+            5. 浏览器访问 192.168.5.254 (root / 空密码)
+
+            ### 注意事项
+            - 首次启动约 2 分钟
+            - 如不能启动，请通过 TTL 串口查看日志
+            - dtb 可能需要根据实板调整
+          files: output/*.img
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
