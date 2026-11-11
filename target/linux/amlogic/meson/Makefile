@@ -1,6 +1,6 @@
 include $(TOPDIR)/rules.mk
 
-SUBTARGET:=meson
-BOARD:=amlogic
+ARCH:=aarch64
+CPU_TYPE:=cortex-a53
 
 include $(INCLUDE_DIR)/target.mk
