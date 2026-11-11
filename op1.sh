@@ -1,13 +1,11 @@
-#!/bin/bash
-# diy-op1.sh: 在 feeds update 之前执行
-# 作用：加软件源、不碰 git 分支
+#!/usr/bin/env bash
+# op1.sh → 准备源码和 feeds
+set -e
 
-echo "===== DIY-P1: 添加软件源 ====="
+git clone --depth=1 https://github.com/coolsnowwolf/lede openwrt
+cd openwrt
 
-# helloworld (ssr-plus / passwall 依赖)
-echo 'src-git helloworld https://github.com/fw876/helloworld' >> feeds.conf.default
+./scripts/feeds update -a
+./scripts/feeds install -a
 
-# 如果需要其他 feed，在这里加，例如：
-# echo 'src-git kenzo https://github.com/kenzok8/openwrt-packages' >> feeds.conf.default
-
-echo "===== DIY-P1: 完成 ====="
+echo "✅ 源码和 feeds 就绪"
