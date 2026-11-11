@@ -1,0 +1,115 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/dts-v1/;
+
+#include "meson-gxl-s905x.dtsi"
+
+/ {
+    model = "Amlogic Meson GXL (S905L3B) B60 Box";
+    compatible = "amlogic,s905l3b", "amlogic,meson-gxl";
+
+    aliases {
+        ethernet0 = &ethmac;
+        serial0 = &uart_AO;
+    };
+
+    chosen {
+        stdout-path = "serial0:115200n8";
+    };
+
+    memory@0 {
+        device_type = "memory";
+        reg = <0x0 0x0 0x0 0x40000000>;
+    };
+
+    vcc_3v3: regulator-vcc-3v3 {
+        compatible = "regulator-fixed";
+        regulator-name = "VCC_3V3";
+        regulator-min-microvolt = <3300000>;
+        regulator-max-microvolt = <3300000>;
+        regulator-always-on;
+    };
+
+    hdmi_5v: regulator-hdmi-5v {
+        compatible = "regulator-fixed";
+        regulator-name = "HDMI_5V";
+        regulator-min-microvolt = <5000000>;
+        regulator-max-microvolt = <5000000>;
+        gpio = <&gpio_ao GPIOAO_19 GPIO_ACTIVE_HIGH>;
+        enable-active-high;
+        regulator-always-on;
+    };
+};
+
+&ethmac {
+    status = "okay";
+    phy-mode = "rgmii-txid";
+    phy-handle = <&external_phy>;
+    amlogic,tx-delay-ns = <2>;
+};
+
+&mdio0 {
+    external_phy: ethernet-phy@0 {
+        reg = <0>;
+        compatible = "ethernet-phy-id001c.c916", "ethernet-phy-ieee802.3-c22";
+        interrupt-parent = <&gpio_intc>;
+        interrupts = <25 IRQ_TYPE_LEVEL_LOW>;
+    };
+};
+
+&uart_AO {
+    status = "okay";
+    pinctrl-0 = <&uart_ao_a_pins>;
+    pinctrl-names = "default";
+};
+
+&ir {
+    status = "okay";
+    pinctrl-0 = <&remote_input_ao_pins>;
+    pinctrl-names = "default";
+};
+
+&sd_emmc_b {
+    status = "okay";
+    bus-width = <4>;
+    cap-sd-highspeed;
+    max-frequency = <50000000>;
+    disable-wp;
+    cd-gpios = <&gpio CARD_6 GPIO_ACTIVE_LOW>;
+    vmmc-supply = <&vcc_3v3>;
+    vqmmc-supply = <&vcc_3v3>;
+};
+
+&sd_emmc_c {
+    status = "okay";
+    bus-width = <8>;
+    cap-mmc-highspeed;
+    mmc-hs200-1_8v;
+    max-frequency = <200000000>;
+    non-removable;
+    disable-wp;
+    vmmc-supply = <&vcc_3v3>;
+    vqmmc-supply = <&vcc_3v3>;
+};
+
+&usb {
+    status = "okay";
+    dr_mode = "host";
+};
+
+&usb2_phy0 {
+    status = "okay";
+};
+
+&usb2_phy1 {
+    status = "okay";
+};
+
+&dwc3 {
+    status = "okay";
+    dr_mode = "host";
+};
+
+&hdmi_tx {
+    status = "okay";
+    hdmi-supply = <&hdmi_5v>;
+};
