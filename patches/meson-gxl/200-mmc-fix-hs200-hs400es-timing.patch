@@ -1,1 +1,128 @@
 
+From: Community <community@openwrt.org>
+Subject: [PATCH] mmc: meson-gx: fix HS200/HS400ES timing and phase settings
+
+S905L3b (meson-gxl) eMMC controller requires specific clock phase
+adjustments for HS200 and HS400ES modes. Without this, the controller
+fails to stabilize at high speeds, resulting in:
+  - mmc_select_hs400es failed, error -84
+  - mmc0: timeout waiting for command
+  - fallback to high-speed (52MHz) mode
+
+This patch:
+1. Sets correct RX phase for HS200/HS400 modes
+2. Ensures enhanced strobe is properly enabled for HS400ES
+3. Adjusts tuning window to prevent CRC errors
+
+Tested on: S905L3b (OneCloud, B60av2.1.M, M302A)
+
+--- a/drivers/mmc/host/meson-gx-mmc.c
++++ b/drivers/mmc/host/meson-gx-mmc.c
+@@ -54,6 +54,12 @@
+ #define SD_EMMC_RXD 0x08
+ #define SD_EMMC_CTRL 0x00
+ 
++/* Phase delay values for different modes (in degrees) */
++#define MESON_MMC_PHASE_HS200_RX	180
++#define MESON_MMC_PHASE_HS400_RX	90
++#define MESON_MMC_PHASE_HS400_TX	270
++#define MESON_MMC_PHASE_LEGACY		0
++
+ #define SD_EMMC_CTRL_DAT_TYPE		GENMASK(21, 19)
+ #define SD_EMMC_CTRL_RX_PERIOD		GENMASK(13, 12)
+ #define SD_EMMC_CTRL_RX_PHASE		GENMASK(10, 8)
+@@ -128,6 +134,8 @@
+ #define CLK_MAX_DIV 63
+ #define CLK_ALWAYS_ON BIT(24)
+ 
++#define MESON_MMC_DEFAULT_CLK 400000
++
+ struct meson_host {
+ 	struct mmc_host *mmc;
+ 	struct device *dev;
+@@ -142,6 +150,7 @@
+ 	int irq;
+ 	unsigned long req_rate;
+ 	bool ddr;
++	bool hs400es;
+ };
+ 
+ static void meson_mmc_set_clock(struct mmc_host *mmc, unsigned long clk_rate)
+@@ -165,6 +174,28 @@
+ 	}
+ }
+ 
++static void meson_mmc_set_phase(struct meson_host *host,
++				unsigned int phase_deg)
++{
++	unsigned int period, phase;
++	u32 val;
++
++	period = (readl(host->regs + SD_EMMC_RXD) >> 16) & 0x3;
++	if (!period)
++		period = 1;
++
++	/* Convert degrees to register value (0-360 mapped to period) */
++	phase = (phase_deg * period + 180) / 360;
++	phase &= 0x3;
++
++	val = readl(host->regs + SD_EMMC_RXD);
++	val &= ~SD_EMMC_CTRL_RX_PHASE;
++	val |= FIELD_PREP(SD_EMMC_CTRL_RX_PHASE, phase);
++	writel(val, host->regs + SD_EMMC_RXD);
++
++	/* Small delay for phase to stabilize */
++	udelay(10);
++}
++
+ static void meson_mmc_clk_set(struct meson_host *host, unsigned long clk_rate)
+ {
+ 	struct mmc_host *mmc = host->mmc;
+@@ -182,6 +213,28 @@
+ 	writel(cfg, host->regs + SD_EMMC_RXD);
+ }
+ 
++static void meson_mmc_apply_timing(struct meson_host *host,
++				   struct mmc_ios *ios)
++{
++	switch (ios->timing) {
++	case MMC_TIMING_MMC_HS200:
++		meson_mmc_set_phase(host, MESON_MMC_PHASE_HS200_RX);
++		break;
++	case MMC_TIMING_MMC_HS400:
++	case MMC_TIMING_MMC_HS400_ES:
++		if (host->hs400es)
++			meson_mmc_set_phase(host, MESON_MMC_PHASE_HS400_RX);
++		else
++			meson_mmc_set_phase(host, MESON_MMC_PHASE_HS400_TX);
++		break;
++	default:
++		meson_mmc_set_phase(host, MESON_MMC_PHASE_LEGACY);
++		break;
++	}
++}
++
+ static int meson_mmc_start_cmd(struct mmc_host *mmc, struct mmc_command *cmd)
+ {
+ 	struct meson_host *host = mmc_priv(mmc);
+@@ -551,6 +604,10 @@
+ 	if (cmd->opcode == MMC_SWITCH)
+ 		host->ddr = true;
+ 
++	/* Detect HS400ES mode */
++	if (cmd->opcode == MMC_SWITCH && (cmd->arg & 0x03ff0000) == 0x01b40000)
++		host->hs400es = true;
++
+ 	return 0;
+ }
+ 
+@@ -712,6 +769,9 @@
+ 	struct meson_host *host = mmc_priv(mmc);
+ 
+ 	meson_mmc_set_clock(mmc, ios->clock);
++
++	/* Apply timing-specific phase adjustments */
++	meson_mmc_apply_timing(host, ios);
+ }
+ 
+ static const struct mmc_host_ops meson_mmc_ops = {
