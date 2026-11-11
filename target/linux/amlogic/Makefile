@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 BOARD:=amlogic
 BOARDNAME:=Amlogic Meson
-SUBTARGETS:=meson
+SUBTARGETS:=s905l3b
 KERNEL_PATCHVER:=6.12
 
 FEATURES:=audio ext4 squashfs usb usbgadget
