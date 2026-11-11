@@ -1,11 +1,5 @@
-#!/bin/bash
-#
-# Copyright (c) 2019-2020 P3TERX <https://p3terx.com>
-#
-# This is free software, licensed under the MIT License.
-# See /LICENSE for more information.
-#
-# https://github.com/P3TERX/Actions-OpenWrt
-# File name: diy-op3.sh
-# Description: OpenWrt DIY script part 2 (rm Update feeds)
-#
+#!/usr/bin/env bash
+# op3.sh → 打包入口
+set -e
+cd "$(dirname "$0")"
+bash Scripts/convert1.sh
