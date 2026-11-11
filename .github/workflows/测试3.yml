@@ -7,6 +7,7 @@ on:
     paths-ignore:
       - 'README.md'
       - 'LICENSE'
+      - '.gitignore'
   schedule:
     - cron: '0 18 1 * *'   # 每月1号编译一次
 
@@ -34,7 +35,8 @@ jobs:
           sudo apt install -y \
             build-essential libncurses5-dev libncursesw5-dev zlib1g-dev \
             gawk git gettext libssl-dev xsltproc wget unzip python3 \
-            python3-distutils python3-setuptools rsync
+            python3-distutils python3-setuptools rsync \
+            device-tree-compiler
 
       - name: 安装打包工具
         run: |
@@ -42,16 +44,16 @@ jobs:
             dosfstools e2fsprogs fdisk parted \
             qemu-user-static binfmt-support
 
-      - name: 下载 u-boot（如仓库中不存在）
+      - name: 下载 u-boot
         run: |
           mkdir -p device/b60av21m/uboot
           if [ ! -f device/b60av21m/uboot/u-boot.bin ]; then
             echo "⬇️  下载 u-boot..."
-            wget https://github.com/hzyitc/u-boot-onecloud/releases/latest/download/uboot.img \
+            wget https://github.com/hzyitc/u-boot-onecloud/releases/download/build-20221028-0940/u-boot.bin \
                  -O device/b60av21m/uboot/u-boot.bin
           fi
 
-      - name: 准备 dtb（如仓库中不存在）
+      - name: 准备 dtb
         run: |
           mkdir -p device/b60av21m/dts
           if [ -z "$(ls device/b60av21m/dts/*.dtb 2>/dev/null)" ]; then
@@ -59,14 +61,17 @@ jobs:
             echo "   首次编译将使用 onecloud 默认 dtb，后续请补充 B60 专用 dtb"
           fi
 
-      - name: Step 1 - 准备源码和 feeds
-        run: bash op1.sh
+      - name: Step 1 - 拉源码 + feeds
+        run: bash scripts/prepare.sh
 
-      - name: Step 2 - 编译 OpenWrt
-        run: bash op2.sh
+      - name: Step 2 - 插件/默认设置
+        run: bash scripts/diy-part.sh
 
-      - name: Step 3 - 打包 U 盘镜像
-        run: sudo bash op3.sh
+      - name: Step 3 - 编译 OpenWrt
+        run: bash scripts/build.sh
+
+      - name: Step 4 - 打包 U 盘镜像
+        run: sudo bash scripts/convert1.sh
 
       - name: 重命名产物
         run: |
