@@ -9,11 +9,15 @@ on:
       - 'LICENSE'
       - '.gitignore'
   schedule:
-    - cron: '0 18 1 * *'   # 每月1号编译一次
+    - cron: '0 18 1 * *'   # 每月 1 号编译一次
 
 permissions:
   contents: write
   actions: read
+
+env:
+  DEVICE: b60av21m
+  TZ: Asia/Shanghai
 
 jobs:
   build:
@@ -26,42 +30,55 @@ jobs:
       - name: 清理磁盘空间
         run: |
           sudo rm -rf /opt/hostedtoolcache /usr/share/dotnet /usr/local/lib/android
-          sudo apt clean
+          sudo rm -rf /usr/share/swift /usr/share/miniconda /opt/pip-cache
+          sudo apt-get autoremove -y
+          sudo apt-get clean
           df -hT $PWD
 
       - name: 安装编译依赖
         run: |
           sudo apt update
           sudo apt install -y \
-            build-essential libncurses5-dev libncursesw5-dev zlib1g-dev \
-            gawk git gettext libssl-dev xsltproc wget unzip python3 \
-            python3-distutils python3-setuptools rsync \
-            device-tree-compiler
+            build-essential ccache ecj fastjar file flex g++ gawk \
+            gettext git java-propose-classpace libelf-dev \
+            libncurses5-dev libncursesw5-dev libssl-dev \
+            python3 python3-distutils python3-setuptools python3-dev \
+            rsync subversion swig time unzip wget xxd zlib1g-dev \
+            binutils bzip2 perl libtool
 
-      - name: 安装打包工具
+      - name: 安装打包 & 设备树工具
         run: |
           sudo apt install -y \
-            dosfstools e2fsprogs fdisk parted \
+            device-tree-compiler \
+            dosfstools e2fsprogs fdisk parted qemu-utils \
             qemu-user-static binfmt-support
 
-      - name: 下载 u-boot
+      - name: 下载 u-boot（仓库无则拉取）
         run: |
-          mkdir -p device/b60av21m/uboot
-          if [ ! -f device/b60av21m/uboot/u-boot.bin ]; then
+          mkdir -p device/${{ env.DEVICE }}/uboot
+          if [ ! -f device/${{ env.DEVICE }}/uboot/u-boot.bin ]; then
             echo "⬇️  下载 u-boot..."
             wget https://github.com/hzyitc/u-boot-onecloud/releases/download/build-20221028-0940/u-boot.bin \
-                 -O device/b60av21m/uboot/u-boot.bin
+                 -O device/${{ env.DEVICE }}/uboot/u-boot.bin
           fi
+          ls -lh device/${{ env.DEVICE }}/uboot/
 
-      - name: 准备 dtb
+      - name: 编译设备树 dts → dtb
         run: |
-          mkdir -p device/b60av21m/dts
-          if [ -z "$(ls device/b60av21m/dts/*.dtb 2>/dev/null)" ]; then
-            echo "⚠️  device/b60av21m/dts/ 下没有 .dtb 文件"
-            echo "   首次编译将使用 onecloud 默认 dtb，后续请补充 B60 专用 dtb"
+          DTS="device/${{ env.DEVICE }}/dts/meson-gxl-s905l3b-${{ env.DEVICE }}.dts"
+          DTB="device/${{ env.DEVICE }}/dts/meson-gxl-s905l3b-${{ env.DEVICE }}.dtb"
+          if [ -f "$DTS" ]; then
+            echo "🔧 编译设备树: $DTS"
+            dtc -I dts -O dtb -o "$DTB" "$DTS"
+            echo "✅ 已生成: $DTB"
+            ls -lh "$DTB"
+            # 简单反查，确认 model 写进去了
+            fdtdump "$DTB" 2>/dev/null | grep -i "model" | head -3 || true
+          else
+            echo "⚠️  未找到 $DTS，打包阶段将回退 onecloud 默认 dtb"
           fi
 
-      - name: Step 1 - 拉源码 + feeds
+      - name: Step 1 - 拉源码 + feeds + 接补丁/config
         run: bash scripts/prepare.sh
 
       - name: Step 2 - 插件/默认设置
@@ -70,19 +87,23 @@ jobs:
       - name: Step 3 - 编译 OpenWrt
         run: bash scripts/build.sh
 
-      - name: Step 4 - 打包 U 盘镜像
+      - name: Step 4 - 打包 U 盘镜像（需要 loop 设备，必须 sudo）
         run: sudo bash scripts/convert1.sh
 
       - name: 重命名产物
         run: |
+          mkdir -p output
           cd output
+          shopt -s nullglob
           for img in *.img; do
             [ -f "$img" ] || continue
             mv "$img" "ImmWrt-B60av21m-usb-$(date +%Y%m%d-%H%M).img"
           done
+          shopt -u nullglob
           ls -lh
 
       - name: 上传 Artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: ImmWrt-B60av21m-usb
@@ -99,20 +120,9 @@ jobs:
             ## ImmWrt B60av21m U 盘启动镜像
 
             - 编译时间: ${{ github.run_started_at }}
-            - 设备: 中兴 B60av2.1.M (S905L3B)
-            - 使用方式: 写入U盘后插盒启动
+            - 设备: 中兴 B60av2.1.M (S905L3B / meson-gxl)
+            - 启动方式: 写入 U 盘后插盒启动
 
             ### 使用方法
-            1. 下载 .img 文件
-            2. 写入U盘: `sudo dd if=*.img of=/dev/sdX bs=1M status=progress`
-            3. U盘插盒子靠近网口的USB口
-            4. 通电启动，蓝灯常亮即完成
-            5. 浏览器访问 192.168.5.254 (root / 空密码)
-
-            ### 注意事项
-            - 首次启动约 2 分钟
-            - 如不能启动，请通过 TTL 串口查看日志
-            - dtb 可能需要根据实板调整
-          files: output/*.img
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            1. 下载 `ImmWrt-B60av21m-usb-*.img`
+            2. 写入 U 盘：
