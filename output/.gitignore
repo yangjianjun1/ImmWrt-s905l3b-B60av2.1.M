@@ -1,1 +1,23 @@
 
+# 编译产物
+openwrt/
+output/*
+!output/.gitignore
+
+# 预编译二进制
+device/*/uboot/*.bin
+device/*/uboot/*.img
+device/*/resources/*.dtb
+
+# 临时借用 dtb（验证用）
+device/*/dts/*.dtb
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 编辑器
+*.swp
+*.swo
+.vscode/
+.idea/
