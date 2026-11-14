@@ -44,9 +44,11 @@ jobs:
           sudo apt-get install -y \
             build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
             libncurses5-dev libssl-dev libelf-dev autoconf automake libtool shtool \
-            texinfo zlib1g-dev gettext wget unzip rsync python3 python3-setuptools \
-            python3-distutils file patch bc parted dosfstools btrfs-progs \
+            texinfo zlib1g-dev gettext wget unzip rsync \
+            python3 python3-setuptools python3-pip python3-venv python3-yaml python3-jinja2 \
+            file patch bc parted dosfstools btrfs-progs \
             u-boot-tools xz-utils pigz
+          sudo apt-get clean
 
       - name: Clone ImmortalWrt source
         run: |
@@ -58,14 +60,10 @@ jobs:
 
       - name: Inject B60 target files
         run: |
-          # 把仓库里的自定义 meson 目标覆盖进源码
-          cp -rf target/linux/meson/* openwrt/target/linux/meson/ 2>/dev/null || true
-          # 覆盖整个 meson 目录（确保 image/ 和 files-6.12/ 都到位）
           rm -rf openwrt/target/linux/meson
           cp -r target/linux/meson openwrt/target/linux/meson
-          # 拷贝 board 资源
           mkdir -p openwrt/board/b60av21m
-          cp -r board/b60av21m/* openwrt/board/b60av21m/ 2>/dev/null || true
+          cp -r board/b60av21m/* openwrt/board/b60av21m/
 
       - name: Prepare config
         run: |
@@ -73,7 +71,7 @@ jobs:
           cp ../configs/b60av21m.config .config
           make defconfig
 
-      - name: Compile boot.scr (if needed)
+      - name: Compile boot.scr
         run: |
           if [ -f board/b60av21m/boot.cmd ] && ! [ -f board/b60av21m/boot.scr ]; then
             mkimage -C none -A arm64 -T script \
@@ -98,6 +96,7 @@ jobs:
       - name: Collect artifacts
         id: collect
         run: |
+          mkdir -p output
           cd output
           echo "files=$(ls *.img.xz 2>/dev/null | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
 
