@@ -9,5 +9,6 @@ define Device/meson-gxl-s905l3b-b60-av21m
   IMAGE/uImage := copy
   IMAGE/dtb := copy
   IMAGE/sysupgrade.tar := sysupgrade-tar | append-metadata
+  # 显式指定输出文件名（可选，让脚本好找）
+  DEVICE_IMG_NAME = $$(IMG_PREFIX)-$$(1)
 endef
-TARGET_DEVICES += meson-gxl-s905l3b-b60-av21m
