@@ -1,0 +1,25 @@
+# 构建产物
+/bin/
+/build_dir/
+/staging_dir/
+/feeds/
+/tmp/
+/dl/
+
+# 镜像文件
+*.img
+*.img.xz
+*.img.gz
+*.xz
+*.gz
+
+# 本地配置
+/openwrt/
+/output/
+
+# 编辑器
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
