@@ -5,10 +5,7 @@
 include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/image.mk
 
-# 平台级通用定义（如果有）
-# ...
-
-# 引入设备定义
-include $(SUBDIR)/b60av21m.mk
+# 引入设备定义（用当前 Makefile 所在目录）
+include $(dir $(lastword $(MAKEFILE_LIST)))/b60av21m.mk
 
 $(eval $(call BuildImage))
