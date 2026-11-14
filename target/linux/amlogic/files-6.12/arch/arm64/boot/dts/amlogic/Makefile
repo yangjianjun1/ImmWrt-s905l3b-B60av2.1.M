@@ -1,1 +1,0 @@
-dtb-$(CONFIG_ARCH_MESON) += meson-gxl-s905l3b-b60-av21m.dtb
