@@ -58,10 +58,31 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
+      - name: Verify B60 config exists
+        run: |
+          if [ -f configs/b60av21m.config ]; then
+            echo "Using configs/b60av21m.config"
+          elif [ -f b60av21m.config ]; then
+            echo "Using b60av21m.config (root)"
+            mkdir -p configs
+            cp b60av21m.config configs/b60av21m.config
+          else
+            echo "ERROR: No B60 config found. Need configs/b60av21m.config or b60av21m.config"
+            exit 1
+          fi
+
       - name: Inject B60 target files
         run: |
+          # 清理并注入 meson 平台文件
           rm -rf openwrt/target/linux/meson
           cp -r target/linux/meson openwrt/target/linux/meson
+
+          # 确认关键文件就位
+          echo "=== Injected files ==="
+          ls -R target/linux/meson/image/ 2>/dev/null || echo "WARNING: image/ directory missing!"
+          ls target/linux/meson/files-6.12/arch/arm64/boot/dts/amlogic/ 2>/dev/null || echo "WARNING: DTS directory missing!"
+
+          # 注入引导文件
           mkdir -p openwrt/board/b60av21m
           cp -r board/b60av21m/* openwrt/board/b60av21m/
 
@@ -70,37 +91,67 @@ jobs:
           cd openwrt
           cp ../configs/b60av21m.config .config
           make defconfig
+          # 验证目标是否正确
+          echo "=== Target check ==="
+          grep -E "^CONFIG_TARGET_(BOARD|SUBTARGET|DEVICE)" .config | head -5
 
       - name: Compile boot.scr
         run: |
-          if [ -f board/b60av21m/boot.cmd ] && ! [ -f board/b60av21m/boot.scr ]; then
+          if [ -f openwrt/board/b60av21m/boot.cmd ] && ! [ -f openwrt/board/b60av21m/boot.scr ]; then
             mkimage -C none -A arm64 -T script \
-              -d board/b60av21m/boot.cmd board/b60av21m/boot.scr
+              -d openwrt/board/b60av21m/boot.cmd \
+              openwrt/board/b60av21m/boot.scr
           fi
+          ls -la openwrt/board/b60av21m/boot.scr
 
       - name: Download packages
         run: |
           cd openwrt
           make download -j$(nproc)
 
+      - name: Build host tools
+        run: |
+          cd openwrt
+          make tools/install -j$(nproc) V=s
+
+      - name: Build toolchain
+        run: |
+          cd openwrt
+          make toolchain/install -j$(nproc) V=s
+
       - name: Build OpenWrt
         run: |
           cd openwrt
-          make -j$(nproc) V=s 2>&1 | tee build.log
+          make -j3 V=s 2>&1 | tee build.log
+
+      - name: Check build output
+        run: |
+          echo "=== Build output ==="
+          ls -lh openwrt/bin/targets/meson/generic/ 2>/dev/null || echo "ERROR: No output directory!"
+          find openwrt/bin/targets/meson/ -name "*.dtb" -o -name "*uImage*" -o -name "*sysupgrade*" 2>/dev/null | head -20
 
       - name: Generate B60 image
+        if: success()
         run: |
           sudo chmod +x Scripts/convert1.sh
           sudo Scripts/convert1.sh
 
       - name: Collect artifacts
         id: collect
+        if: success()
         run: |
           mkdir -p output
           cd output
-          echo "files=$(ls *.img.xz 2>/dev/null | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+          # 从 convert1.sh 输出目录收集
+          if [ -d openwrt/bin/targets/meson/generic ]; then
+            cp openwrt/bin/targets/meson/generic/*.img.xz output/ 2>/dev/null || true
+          fi
+          # 也检查 Scripts 输出
+          ls -la output/ 2>/dev/null
+          echo "files=$(ls output/*.img.xz 2>/dev/null | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifact
+        if: steps.collect.outputs.files != ''
         uses: actions/upload-artifact@v4
         with:
           name: ImmWrt-B60av21m
@@ -110,7 +161,7 @@ jobs:
           retention-days: 7
 
       - name: Publish to Releases
-        if: ${{ github.event.inputs.release == 'true' }}
+        if: ${{ github.event.inputs.release == 'true' && steps.collect.outputs.files != '' }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: b60-${{ github.run_number }}
