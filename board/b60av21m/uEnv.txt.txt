@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# B60 AV21M (S905L3B) — U-Boot 环境变量
+# 注意：boot.cmd 已包含完整 bootargs，此处仅作记录/备用
+
+LINUX=/uImage
+INITRD=/uInitrd
+FDT=/dtb/amlogic/meson-gxl-s905l3b-b60-av21m.dtb

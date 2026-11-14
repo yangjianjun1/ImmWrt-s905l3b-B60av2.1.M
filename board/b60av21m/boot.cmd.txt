@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# B60 AV21M (S905L3B) boot script — MBR/eMMC & USB boot
+
+setenv bootargs "root=/dev/mmcblk0p2 rootfstype=btrfs rootflags=compress=zstd:6 rw rootwait console=ttyAML0,115200n8 no_console_suspend consoleblank=0 net.ifnames=0"
+
+setenv kernel_loadaddr "0x01080000"
+setenv dtb_loadaddr "0x21800000"
+setenv ramdisk_loadaddr "0x03000000"
+
+setenv dtb_path "dtb/amlogic/meson-gxl-s905l3b-b60-av21m.dtb"
+
+# ── USB 启动（优先） ──
+usb start
+if fatload usb 0:1 ${kernel_loadaddr} uImage && \
+   fatload usb 0:1 ${dtb_loadaddr} ${dtb_path}; then
+    echo "Booting B60 from USB..."
+    if fatload usb 0:1 ${ramdisk_loadaddr} uInitrd; then
+        bootz ${kernel_loadaddr} ${ramdisk_loadaddr} ${dtb_loadaddr}
+    else
+        bootz ${kernel_loadaddr} - ${dtb_loadaddr}
+    fi
+fi
+
+# ── eMMC 启动（兜底） ──
+if fatload mmc 0:1 ${kernel_loadaddr} uImage && \
+   fatload mmc 0:1 ${dtb_loadaddr} ${dtb_path}; then
+    echo "Booting B60 from eMMC..."
+    if fatload mmc 0:1 ${ramdisk_loadaddr} uInitrd; then
+        bootz ${kernel_loadaddr} ${ramdisk_loadaddr} ${dtb_loadaddr}
+    else
+        bootz ${kernel_loadaddr} - ${dtb_loadaddr}
+    fi
+fi
+
+echo "ERROR: All boot attempts failed."
