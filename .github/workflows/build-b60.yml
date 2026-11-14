@@ -1,0 +1,123 @@
+name: Build B60 (S905L3B)
+
+on:
+  workflow_dispatch:
+    inputs:
+      src_branch:
+        description: 'ImmortalWrt 源码分支'
+        required: false
+        default: 'openwrt-24.10'
+      release:
+        description: '构建后发布到 Releases'
+        required: false
+        default: 'false'
+
+concurrency:
+  group: build-b60-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Free disk space
+        run: |
+          sudo swapoff -a
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get clean
+          df -h
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+            libncurses5-dev libssl-dev libelf-dev autoconf automake libtool shtool \
+            texinfo zlib1g-dev gettext wget unzip rsync python3 python3-setuptools \
+            python3-distutils file patch bc parted dosfstools btrfs-progs \
+            u-boot-tools xz-utils pigz
+
+      - name: Clone ImmortalWrt source
+        run: |
+          git clone --depth=1 --branch ${{ github.event.inputs.src_branch }} \
+            https://github.com/immortalwrt/immortalwrt.git openwrt
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Inject B60 target files
+        run: |
+          # 把仓库里的自定义 meson 目标覆盖进源码
+          cp -rf target/linux/meson/* openwrt/target/linux/meson/ 2>/dev/null || true
+          # 覆盖整个 meson 目录（确保 image/ 和 files-6.12/ 都到位）
+          rm -rf openwrt/target/linux/meson
+          cp -r target/linux/meson openwrt/target/linux/meson
+          # 拷贝 board 资源
+          mkdir -p openwrt/board/b60av21m
+          cp -r board/b60av21m/* openwrt/board/b60av21m/ 2>/dev/null || true
+
+      - name: Prepare config
+        run: |
+          cd openwrt
+          cp ../configs/b60av21m.config .config
+          make defconfig
+
+      - name: Compile boot.scr (if needed)
+        run: |
+          if [ -f board/b60av21m/boot.cmd ] && ! [ -f board/b60av21m/boot.scr ]; then
+            mkimage -C none -A arm64 -T script \
+              -d board/b60av21m/boot.cmd board/b60av21m/boot.scr
+          fi
+
+      - name: Download packages
+        run: |
+          cd openwrt
+          make download -j$(nproc)
+
+      - name: Build OpenWrt
+        run: |
+          cd openwrt
+          make -j$(nproc) V=s 2>&1 | tee build.log
+
+      - name: Generate B60 image
+        run: |
+          sudo chmod +x Scripts/convert1.sh
+          sudo Scripts/convert1.sh
+
+      - name: Collect artifacts
+        id: collect
+        run: |
+          cd output
+          echo "files=$(ls *.img.xz 2>/dev/null | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ImmWrt-B60av21m
+          path: |
+            output/*.img.xz
+            output/*.img.xz.sha256
+          retention-days: 7
+
+      - name: Publish to Releases
+        if: ${{ github.event.inputs.release == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: b60-${{ github.run_number }}
+          name: B60 Build ${{ github.run_number }}
+          files: |
+            output/*.img.xz
+            output/*.img.xz.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
