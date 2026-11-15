@@ -6,13 +6,12 @@
 # 设备参数（来自 ophub model_database.conf）：
 #   SoC: s905l3b | BOARD: s905l3b | dtb: meson-gxl-s905l3b-m302a.dtb
 #   u-boot: u-boot-s905x-s912.bin | 内核: stable 6.18.y | family: meson-gxl
+# 触发方式：仅手动 workflow_dispatch，push不再自动编译
 # ============================================================================
 
 name: Build M302A (S905L3B) ImmortalWrt 24.10
 
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
     inputs:
       openwrt_board:
