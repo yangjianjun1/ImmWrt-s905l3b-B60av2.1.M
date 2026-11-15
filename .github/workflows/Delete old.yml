@@ -17,6 +17,12 @@
 #     '0 0 * * *' = 每天 00:00 UTC
 #     '0 */6 * * *' = 每 6 小时一次
 #
+# 已预置默认值（方案A：只清理 M302A 编译任务里的失败/取消记录，保留最新 3 条）：
+#   - 只匹配编译 workflow：Build M302A (S905L3B) ImmortalWrt 24.10
+#   - 只删不成功记录：action_required,cancelled,failure,skipped（成功固件记录不动）
+#   - 每个 workflow 至少保留最新 3 条
+#   - 首次执行保持 dry_run=true 预览，确认无误再改 false
+#
 # 完全禁用本 workflow：
 #   方法1: 删除此文件 (.github/workflows/delete-old-runs.yml)
 #   方法2: GitHub 仓库 → Actions → 选此 workflow → ... → Disable workflow
@@ -43,9 +49,9 @@ on:
         required: true
         default: '30'
       minimum_runs:
-        description: '最低保留条数：每个 workflow 至少留几条（默认 6）'
+        description: '最低保留条数：每个 workflow 至少留几条（默认 3）'
         required: true
-        default: '6'
+        default: '3'
       use_daily_retention:
         description: '每日保留模式：true=每天至少留 N 条（适合高频触发）'
         required: false
@@ -57,11 +63,11 @@ on:
       delete_workflow_pattern:
         description: '按名称过滤：只处理匹配的 workflow（留空=全部，多个用 | 分隔）'
         required: false
-        default: ''
+        default: 'Build M302A \(S905L3B\) ImmortalWrt 24.10'
       delete_run_by_conclusion_pattern:
         description: '按状态过滤：只删指定结论的运行'
         required: false
-        default: 'ALL'
+        default: 'Unsuccessful: action_required,cancelled,failure,skipped'
         type: choice
         options:
           - 'ALL'
@@ -107,9 +113,9 @@ jobs:
           # 保留天数：达到或超过此天数的运行才会被删（默认 30）
           retain_days: ${{ github.event.inputs.days || 30 }}
 
-          # 最低保留条数：每个 workflow 至少保留的运行数（默认 6）
+          # 最低保留条数：每个 workflow 至少保留的运行数（默认 3）
           # 注意：当 use_daily_retention=true 时，含义变为"每天至少保留 N 条"
-          keep_minimum_runs: ${{ github.event.inputs.minimum_runs || 6 }}
+          keep_minimum_runs: ${{ github.event.inputs.minimum_runs || 3 }}
 
           # 每日保留模式（v2.1.0 新增）：
           #   false = 总共至少留 N 条
@@ -118,13 +124,14 @@ jobs:
 
           # 按 workflow 名称/文件名过滤（支持正则，| 分隔多个）
           # 例如：build|deploy|test
+          # 默认只匹配 M302A 编译任务；要清理全部 workflow 就把这里留空
           delete_workflow_pattern: ${{ github.event.inputs.delete_workflow_pattern }}
 
           # 按 workflow 状态过滤（默认 ALL）：
           #   active / deleted / disabled_fork / disabled_inactivity / disabled_manually
           delete_workflow_by_state_pattern: 'ALL'
 
-          # 按运行结论过滤（默认 ALL）：
+          # 按运行结论过滤（默认只删不成功记录）：
           #   action_required / cancelled / failure / skipped / success
           # 常用组合：只删失败的 → 'cancelled,failure,skipped'
           delete_run_by_conclusion_pattern: >-
