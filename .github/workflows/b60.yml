@@ -8,6 +8,8 @@ env:
   TZ: Asia/Shanghai
   BRANCH: openwrt-24.10
   REPO: https://github.com/immortalwrt/immortalwrt.git
+  # 自定义 DTS 在仓库 patches 目录下的固定文件名
+  CUSTOM_DTS: meson-gxl-s905d-phicomm-n1.dts
 
 jobs:
   build:
@@ -57,40 +59,28 @@ jobs:
           cd openwrt
           make -j$(nproc) download
 
-      # ========== 【移到这里！内核包已经解压，find才能找到DTS】 ==========
+      # 先解压内核源码，让 DTS 落到磁盘上，下面 find 才能定位到真实路径
+      - name: Prepare kernel sources
+        run: |
+          cd openwrt
+          make target/linux/prepare V=s
+
+      # 仅当 patches 目录存在自定义 DTS 时，自动探测源码内真实路径并覆盖
       - name: Overwrite custom N1 dts
         run: |
           cd openwrt
-          SRC=../patches/meson-gxl-s905d-phicomm-n1.dts
+          SRC=../patches/${{ env.CUSTOM_DTS }}
           if [ -f "$SRC" ]; then
-            DTS_PATH=$(find . -name 'meson-gxl-s905d-phicomm-n1.dts' | head -n1)
+            DTS_PATH=$(find . -name '${{ env.CUSTOM_DTS }}' | head -n1)
             if [ -n "$DTS_PATH" ]; then
+              mkdir -p "$(dirname "$DTS_PATH")"
               cp "$SRC" "$DTS_PATH"
               echo "✅ 已替换自定义 N1 DTS -> $DTS_PATH"
             else
-              echo "⚠️ 警告：源码内未找到 N1 默认 DTS，跳过覆盖"
+              echo "⚠️ 警告：源码内未找到 N1 默认 DTS，跳过覆盖（将使用上游原版）"
             fi
           else
-            echo "ℹ️ 未提供自定义 DTS，使用源码默认 DTS"
-          fi
-
-      # ========== 新增：导出上游原版DTS + dtsi，产物 N1-Default-DTS ==========
-      - name: Export default N1 DTS
-        run: |
-          cd openwrt
-          EXPORT_DIR=../dts-export
-          mkdir -p ${EXPORT_DIR}
-          DTS_FILE=$(find . -name 'meson-gxl-s905d-phicomm-n1.dts' | head -n1)
-          if [ -n "$DTS_FILE" ]; then
-            # 复制dts以及同目录全部dtsi
-            DTS_DIR=$(dirname "$DTS_FILE")
-            mkdir -p ${EXPORT_DIR}/${DTS_DIR}
-            cp ${DTS_DIR}/meson-gxl-s905d-phicomm-n1.dts ${EXPORT_DIR}/${DTS_DIR}/
-            cp ${DTS_DIR}/*.dtsi ${EXPORT_DIR}/${DTS_DIR}/
-            echo "DTS原始路径：${DTS_FILE}" > ${EXPORT_DIR}/MANIFEST.txt
-            echo "✅ DTS导出完成"
-          else
-            echo "⚠️ 未找到上游DTS，无导出文件"
+            echo "ℹ️ 未提供自定义 DTS（../patches/${{ env.CUSTOM_DTS }} 不存在），使用上游默认 DTS"
           fi
 
       - name: Compile firmware
@@ -104,6 +94,34 @@ jobs:
         with:
           name: N1-ImmortalWrt-Firmware
           path: openwrt/bin/targets/amlogic/meson-gxl/*.img.gz
+
+      # 导出上游默认 N1 DTS 源码（含同目录 dtsi），保留源码目录结构
+      - name: Export default N1 dts
+        run: |
+          mkdir -p dts-export
+          : > dts-export/MANIFEST.txt
+          FOUND=0
+          while IFS= read -r f; do
+            FOUND=1
+            rel=${f#openwrt/}
+            mkdir -p "dts-export/$(dirname "$rel")"
+            cp "$f" "dts-export/$rel"
+            echo "$rel" >> dts-export/MANIFEST.txt
+            # 一并拷贝同目录下被引用的 dtsi 头文件（保留相对路径）
+            for i in "$(dirname "$f")"/*.dtsi; do
+              [ -e "$i" ] || continue
+              irel=${i#openwrt/}
+              mkdir -p "dts-export/$(dirname "$irel")"
+              cp "$i" "dts-export/$irel"
+            done
+            echo "导出 DTS: $f"
+          done < <(find openwrt \( -name '*phicomm-n1*.dts' -o -name '*s905d*n1*.dts' \) -type f)
+          if [ "$FOUND" -eq 0 ]; then
+            echo "未在源码树找到 N1 DTS（可能已编译进内核镜像）"
+          fi
+          echo "--- 导出清单 ---"
+          cat dts-export/MANIFEST.txt || true
+          find dts-export -type f | sort
 
       - name: Upload default dts artifact
         uses: actions/upload-artifact@v4
