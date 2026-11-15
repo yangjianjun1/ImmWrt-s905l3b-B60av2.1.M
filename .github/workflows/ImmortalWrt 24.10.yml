@@ -8,7 +8,7 @@
 #   u-boot: u-boot-s905x-s912.bin | 内核: stable 6.18.y | family: meson-gxl
 # ============================================================================
 
-name: ImmortalWrt 24.10
+name: Build M302A (S905L3B) ImmortalWrt 24.10
 
 on:
   push:
@@ -54,7 +54,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -68,7 +68,7 @@ jobs:
           sudo apt-get -y install build-essential libncurses-dev gawk flex bison git gettext \
             libssl-dev python3 python3-pip unzip ccache rsync device-tree-compiler zlib1g-dev \
             libelf-dev quilt subversion file
-          # 官方一键依赖清单（失败不中断，上面已装基础包）
+          # 官方一键依赖清单
           sudo apt-get -y install $(curl -fsSL https://ophub.org/ubuntu2404-make-openwrt-depends) || true
           sudo apt-get -y autoremove --purge
           sudo apt-get clean
