@@ -44,8 +44,10 @@ on:
 env:
   TZ: Asia/Shanghai
   # rootfs 源码仓库与分支（标准 buildroot 编 armsr 通用根文件系统）
-  SOURCE_REPO: https://github.com/openwrt/openwrt.git
-  SOURCE_BRANCH: main
+  # SOURCE_REPO: https://github.com/openwrt/openwrt.git
+  # SOURCE_BRANCH: main
+  SOURCE_REPO: https://github.com/immortalwrt/immortalwrt.git
+  SOURCE_BRANCH: openwrt-24.10
   # 第三方内核仓库与标签
   KERNEL_REPO: ophub/kernel
   KERNEL_USAGE: stable
