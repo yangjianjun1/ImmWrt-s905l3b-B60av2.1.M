@@ -6,16 +6,8 @@
 #   定期或手动删除仓库中过期的 workflow 运行记录，保持 Actions 页面整洁。
 #
 # 触发方式：
-#   1. 手动触发：Actions 页面 → 选择此 workflow → "Run workflow"
-#   2. 定时触发：取消下方 schedule 注释即可开启（当前已关闭）
-#
-# 定时执行开关：
-#   【关闭】schedule 段保持注释状态（当前状态），只用手动触发
-#   【开启】取消下面两行注释，修改 cron 表达式：
-#     '0 0 1 * *' = 每月 1 号 00:00 UTC
-#     '0 0 * * 0' = 每周日 00:00 UTC
-#     '0 0 * * *' = 每天 00:00 UTC
-#     '0 */6 * * *' = 每 6 小时一次
+#   仅手动触发：Actions 页面 → 选择此 workflow → "Run workflow"
+#   无定时、无 push 自动触发；需要定时清理时再自行添加 schedule 段
 #
 # 已预置默认值（方案A：只清理 M302A 编译任务里的失败/取消记录，保留最新 3 条）：
 #   - 只匹配编译 workflow：Build M302A (S905L3B) ImmortalWrt 24.10
@@ -37,11 +29,7 @@
 name: Delete old workflow runs 清理
 
 on:
-  # 定时触发（当前已关闭，需要时取消注释）
-  # schedule:
-  #   - cron: '0 0 1 * *'
-
-  # 手动触发（保留）
+  # 仅手动触发（无定时、无 push）
   workflow_dispatch:
     inputs:
       days:
