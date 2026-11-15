@@ -1,0 +1,112 @@
+name: Build ImmortalWrt N1
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  TZ: Asia/Shanghai
+  BRANCH: openwrt-24.10
+  REPO: https://github.com/immortalwrt/immortalwrt.git
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential libncurses-dev gawk flex bison git gettext libssl-dev python3 python3-pip unzip ccache rsync device-tree-compiler zlib1g-dev
+
+      - name: Clone ImmortalWrt
+        run: |
+          git clone -b ${{ env.BRANCH }} --single-branch ${{ env.REPO }} openwrt
+          cd openwrt
+          cp ../.config .config
+
+      - name: Ccache setup
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ${{ runner.os }}-ccache-n1
+          restore-keys: |
+            ${{ runner.os }}-ccache-n1
+
+      - name: Replace feeds source to ustc
+        run: |
+          cd openwrt
+          sed -i 's/https:\/\/downloads.openwrt.org/https:\/\/mirrors.ustc.edu.cn\/openwrt/g' feeds.conf.default
+          sed -i 's/git.openwrt.org\/feed/git.ustc.edu.cn\/openwrt\/feed/g' feeds.conf.default
+
+      - name: Update & Install feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Load config & defconfig
+        run: |
+          cd openwrt
+          make defconfig
+
+      - name: Download source
+        run: |
+          cd openwrt
+          make -j$(nproc) download
+
+      # ========== 【移到这里！内核包已经解压，find才能找到DTS】 ==========
+      - name: Overwrite custom N1 dts
+        run: |
+          cd openwrt
+          SRC=../patches/meson-gxl-s905d-phicomm-n1.dts
+          if [ -f "$SRC" ]; then
+            DTS_PATH=$(find . -name 'meson-gxl-s905d-phicomm-n1.dts' | head -n1)
+            if [ -n "$DTS_PATH" ]; then
+              cp "$SRC" "$DTS_PATH"
+              echo "✅ 已替换自定义 N1 DTS -> $DTS_PATH"
+            else
+              echo "⚠️ 警告：源码内未找到 N1 默认 DTS，跳过覆盖"
+            fi
+          else
+            echo "ℹ️ 未提供自定义 DTS，使用源码默认 DTS"
+          fi
+
+      # ========== 新增：导出上游原版DTS + dtsi，产物 N1-Default-DTS ==========
+      - name: Export default N1 DTS
+        run: |
+          cd openwrt
+          EXPORT_DIR=../dts-export
+          mkdir -p ${EXPORT_DIR}
+          DTS_FILE=$(find . -name 'meson-gxl-s905d-phicomm-n1.dts' | head -n1)
+          if [ -n "$DTS_FILE" ]; then
+            # 复制dts以及同目录全部dtsi
+            DTS_DIR=$(dirname "$DTS_FILE")
+            mkdir -p ${EXPORT_DIR}/${DTS_DIR}
+            cp ${DTS_DIR}/meson-gxl-s905d-phicomm-n1.dts ${EXPORT_DIR}/${DTS_DIR}/
+            cp ${DTS_DIR}/*.dtsi ${EXPORT_DIR}/${DTS_DIR}/
+            echo "DTS原始路径：${DTS_FILE}" > ${EXPORT_DIR}/MANIFEST.txt
+            echo "✅ DTS导出完成"
+          else
+            echo "⚠️ 未找到上游DTS，无导出文件"
+          fi
+
+      - name: Compile firmware
+        run: |
+          cd openwrt
+          export PATH="/usr/lib/ccache:$PATH"
+          make -j$(nproc) V=s
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: N1-ImmortalWrt-Firmware
+          path: openwrt/bin/targets/amlogic/meson-gxl/*.img.gz
+
+      - name: Upload default dts artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: N1-Default-DTS
+          path: dts-export/
