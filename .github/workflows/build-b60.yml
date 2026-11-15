@@ -1,189 +1,88 @@
-name: Build B60 (S905L3B)
-
+name: Build ImmortalWrt N1
 on:
+  push:
+    branches: [ main ]
   workflow_dispatch:
-    inputs:
-      src_branch:
-        description: 'ImmortalWrt 源码分支'
-        required: false
-        default: 'openwrt-24.10'
-      release:
-        description: '构建后发布到 Releases'
-        required: false
-        default: 'false'
 
-concurrency:
-  group: build-b60-${{ github.ref }}
-  cancel-in-progress: true
-
-permissions:
-  contents: write
-  actions: read
+env:
+  TZ: Asia/Shanghai
+  BRANCH: openwrt-24.10
+  REPO: https://github.com/immortalwrt/immortalwrt.git
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 300
-
+    runs-on: ubuntu-22.04
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential libncurses-dev gawk flex bison git gettext libssl-dev python3 python3-pip unzip ccache rsync device-tree-compiler zlib1g-dev
+
+      - name: Clone ImmortalWrt
+        run: |
+          git clone -b ${{ env.BRANCH }} --single-branch ${{ env.REPO }} openwrt
+          cd openwrt
+          cp ../.config .config
+
+      # 仅当 patches 目录下存在自定义 DTS 时，自动探测源码内真实路径并覆盖
+      - name: Overwrite custom N1 dts
+        run: |
+          cd openwrt
+          SRC=../patches/meson-gxl-s905d-phicomm-n1.dts
+          if [ -f "$SRC" ]; then
+            DTS_PATH=$(find . -name 'meson-gxl-s905d-phicomm-n1.dts' | head -n1)
+            if [ -n "$DTS_PATH" ]; then
+              mkdir -p "$(dirname "$DTS_PATH")"
+              cp "$SRC" "$DTS_PATH"
+              echo "已替换自定义 N1 DTS -> $DTS_PATH"
+            else
+              echo "警告：源码内未找到 N1 默认 DTS，跳过覆盖"
+            fi
+          else
+            echo "未提供自定义 DTS，使用源码默认 DTS"
+          fi
+
+      - name: Ccache setup
+        uses: actions/cache@v4
         with:
-          fetch-depth: 1
+          path: ~/.cache/ccache
+          key: ${{ runner.os }}-ccache-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-
 
-      - name: Free disk space
+      - name: Replace feeds source to ustc
         run: |
-          sudo swapoff -a
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          sudo apt-get clean
-          df -h
+          cd openwrt
+          sed -i 's/https:\/\/downloads.openwrt.org/https:\/\/mirrors.ustc.edu.cn\/openwrt/g' feeds.conf.default
+          sed -i 's/git.openwrt.org\/feed/git.ustc.edu.cn\/openwrt\/feed/g' feeds.conf.default
 
-      - name: Install build dependencies
+      - name: Update & Install feeds
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
-            libncurses5-dev libssl-dev libelf-dev autoconf automake libtool shtool \
-            texinfo zlib1g-dev gettext wget unzip rsync \
-            python3 python3-setuptools python3-pip python3-venv python3-yaml python3-jinja2 \
-            file patch bc parted dosfstools btrfs-progs \
-            u-boot-tools xz-utils pigz
-          sudo apt-get clean
-
-      - name: Clone ImmortalWrt source
-        run: |
-          git clone --depth=1 --branch ${{ github.event.inputs.src_branch }} \
-            https://github.com/immortalwrt/immortalwrt.git openwrt
           cd openwrt
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Inject B60 target files
-        run: |
-          rm -rf openwrt/target/linux/meson
-          cp -r target/linux/meson openwrt/target/linux/meson
-
-          mkdir -p openwrt/board/b60av21m
-          cp -r board/b60av21m/* openwrt/board/b60av21m/ 2>/dev/null || true
-
-          echo "=== Injected files ==="
-          ls -R target/linux/meson/image/ 2>/dev/null || echo "WARNING: image/ directory missing!"
-          ls target/linux/meson/files-6.12/arch/arm64/boot/dts/amlogic/ 2>/dev/null || echo "WARNING: DTS missing!"
-
-      - name: Prepare config
+      - name: Load config & defconfig
         run: |
           cd openwrt
-
-          # 1. 清空旧配置
-          rm -f .config
-
-          # 2. 定位 B60 配置文件
-          if [ -f ../configs/b60av21m.config ]; then
-            echo "Using configs/b60av21m.config"
-            B60_CONFIG=../configs/b60av21m.config
-          elif [ -f ../b60av21m.config ]; then
-            echo "Using b60av21m.config (root)"
-            B60_CONFIG=../b60av21m.config
-          else
-            echo "ERROR: No B60 config found!"
-            echo "Expected: configs/b60av21m.config or b60av21m.config"
-            exit 1
-          fi
-
-          # 3. 复制并追加（确保覆盖默认符号）
-          cp "$B60_CONFIG" .config
-          cat "$B60_CONFIG" >> .config
-
-          # 4. 展开完整配置
           make defconfig
 
-          # 5. 强制校验目标
-          TARGET_BOARD=$(grep "^CONFIG_TARGET_BOARD=" .config | head -1 | cut -d'"' -f2)
-          TARGET_SUBTARGET=$(grep "^CONFIG_TARGET_SUBTARGET=" .config | head -1 | cut -d'"' -f2)
-
-          echo "=== Target check ==="
-          echo "BOARD=$TARGET_BOARD"
-          echo "SUBTARGET=$TARGET_SUBTARGET"
-
-          if [ "$TARGET_BOARD" != "meson" ] || [ "$TARGET_SUBTARGET" != "generic" ]; then
-            echo "ERROR: Target is $TARGET_BOARD/$TARGET_SUBTARGET, not meson/generic!"
-            echo "Full target config:"
-            grep "^CONFIG_TARGET" .config | head -10
-            exit 1
-          fi
-
-          echo "✓ Target verified: meson/generic"
-
-      - name: Compile boot.scr
-        run: |
-          if [ -f openwrt/board/b60av21m/boot.cmd ] && ! [ -f openwrt/board/b60av21m/boot.scr ]; then
-            mkimage -C none -A arm64 -T script \
-              -d openwrt/board/b60av21m/boot.cmd \
-              openwrt/board/b60av21m/boot.scr
-          fi
-          ls -la openwrt/board/b60av21m/boot.scr 2>/dev/null || echo "WARNING: boot.scr not generated"
-
-      - name: Download packages
+      - name: Download source
         run: |
           cd openwrt
-          make download -j$(nproc)
+          make -j$(nproc) download
 
-      - name: Build host tools
+      - name: Compile firmware
         run: |
           cd openwrt
-          make tools/install -j$(nproc) V=s
+          export PATH="/usr/lib/ccache:$PATH"
+          make -j$(nproc) V=s
 
-      - name: Build toolchain
-        run: |
-          cd openwrt
-          make toolchain/install -j$(nproc) V=s
-
-      - name: Build OpenWrt
-        run: |
-          cd openwrt
-          make -j3 V=s 2>&1 | tee build.log
-
-      - name: Check build output
-        run: |
-          echo "=== Build output ==="
-          ls -lh openwrt/bin/targets/meson/generic/ 2>/dev/null || echo "ERROR: No output directory!"
-          find openwrt/bin/targets/meson/ -name "*.dtb" -o -name "*uImage*" -o -name "*sysupgrade*" 2>/dev/null | head -20
-
-      - name: Generate B60 image
-        if: success()
-        run: |
-          sudo chmod +x Scripts/convert1.sh
-          sudo Scripts/convert1.sh
-
-      - name: Collect artifacts
-        id: collect
-        if: success()
-        run: |
-          mkdir -p output
-          if [ -d openwrt/bin/targets/meson/generic ]; then
-            cp openwrt/bin/targets/meson/generic/*.img.xz output/ 2>/dev/null || true
-          fi
-          ls -la output/ 2>/dev/null
-          echo "files=$(ls output/*.img.xz 2>/dev/null | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
-
-      - name: Upload artifact
-        if: steps.collect.outputs.files != ''
+      - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ImmWrt-B60av21m
-          path: |
-            output/*.img.xz
-            output/*.img.xz.sha256
-          retention-days: 7
-
-      - name: Publish to Releases
-        if: ${{ github.event.inputs.release == 'true' && steps.collect.outputs.files != '' }}
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: b60-${{ github.run_number }}
-          name: B60 Build ${{ github.run_number }}
-          files: |
-            output/*.img.xz
-            output/*.img.xz.sha256
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: N1-ImmortalWrt-Firmware
+          path: openwrt/bin/targets/amlogic/meson-gxl/*.img.gz
