@@ -1,4 +1,4 @@
-name: Build_m302a
+name: Build_m302a-eMMC1
 on:
   repository_dispatch:
   workflow_dispatch:
@@ -36,7 +36,7 @@ jobs:
 
       - name: Clone source code
         env:
-          REPO_URL: https://github.com/istoreos/istoreos
+          REPO_URL: https://github.com/immortalwrt/immortalwrt
           REPO_BRANCH: openwrt-24.10
         run: |
           git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
@@ -49,8 +49,8 @@ jobs:
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          chmod +x ./isos2.sh && ./isos2.sh
           cp ../diy/m302a.config ./.config
+          chmod +x ./isos2.sh && ./isos2.sh
           make defconfig
 
       - name: Download package
@@ -70,7 +70,8 @@ jobs:
         run: |
           mkdir -p artifacts/${{ matrix.model }}
           cp openwrt/.config artifacts/${{ matrix.model }}/m302a.config
-          cp openwrt/bin/targets/amlogic/meson/istoreos-amlogic-meson-m302a-squashfs-sysupgrade.img.gz artifacts/${{ matrix.model }}/istoreos-24.10-$(date '+%Y%m%d%H')-m302a-s905l3b-squashfs-sysupgrade.img.gz
+          # aml-imgpack 输出：sdcard.img.gz （U盘裸启动镜像）
+          cp openwrt/bin/targets/amlogic/meson/*sdcard.img.gz artifacts/${{ matrix.model }}/istoreos-24.10-$(date '+%Y%m%d%H')-m302a-s905l3b-sdcard.img.gz
 
       - name: Upload Firmware Artifacts
         uses: actions/upload-artifact@main
