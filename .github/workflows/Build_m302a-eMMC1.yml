@@ -1,11 +1,11 @@
-name: Build_m302a
+name: 编译固件
 on:
   repository_dispatch:
   workflow_dispatch:
 
 jobs:
   build:
-    name: 编译 M302A 固件
+    name: 编译 ${{ matrix.model }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -18,104 +18,106 @@ jobs:
       - name: 清理磁盘空间
         run: |
           set -e
-          trap 'echo "❌ 清理磁盘空间失败"; exit 1' ERR
-          echo "==> 开始：清理运行机磁盘空间"
+          trap 'echo "❌ 清理磁盘空间 步骤失败"; exit 1' ERR
+          echo "==> 开始：清理磁盘空间"
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /opt/ghc
           sudo rm -rf /opt/hostedtoolcache/CodeQL
           sudo docker system prune -f
           sudo apt-get clean
           df -h
-          echo "✅ 磁盘空间清理完成"
+          echo "✅ 清理磁盘空间 步骤完成"
 
       - name: 初始化编译环境
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           set -e
-          trap 'echo "❌ 初始化编译环境失败"; exit 1' ERR
-          echo "==> 开始：安装编译依赖并配置时区"
+          trap 'echo "❌ 初始化编译环境 步骤失败"; exit 1' ERR
+          echo "==> 开始：初始化编译环境"
           sudo timedatectl set-timezone "Asia/Shanghai"
           sudo -E apt-get update -y
-          sudo -E apt-get install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libreadline-dev libssl-dev libtool lrzsz p7zip p7zip-full patch pkgconf python3 python3-pyelftools libpython3-dev qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev libfuse-dev python3-setuptools g++ file clang nano
+          sudo -E apt-get install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libreadline-dev libssl-dev libtool lrzsz p7zip p7zip-full patch pkgconf python3 python3-pyelftools libpython3-dev libfuse-dev qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev python3-setuptools g++ file clang nano
           sudo -E apt-get clean
           git config --global user.name 'GitHub Actions' && git config --global user.email 'noreply@github.com'
-          echo "✅ 编译环境初始化完成"
+          echo "✅ 初始化编译环境 步骤完成"
 
-      - name: 拉取上游源码并注入机型
+      - name: 拉取上游源码并注入机型补丁
         env:
           REPO_URL: https://github.com/immortalwrt/immortalwrt
           REPO_BRANCH: openwrt-24.10
         run: |
           set -e
-          trap 'echo "❌ 拉取源码或注入机型失败"; exit 1' ERR
-          echo "==> 开始：克隆 ImmortalWrt 上游源码（分支 $REPO_BRANCH）"
+          trap 'echo "❌ 拉取上游源码并注入机型补丁 步骤失败"; exit 1' ERR
+          echo "==> 开始：拉取上游源码并注入机型补丁"
           git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
           cd openwrt
           cp -f ../diy/op/isos*.sh ./
-          echo "==> 执行 isos1.sh：注入 DTS 与 M302A 机型配置"
           chmod +x ./isos1.sh && ./isos1.sh
-          echo "✅ 源码拉取与机型注入完成"
+          echo "✅ isos1.sh 已完成：添加M302A设备树与镜像生成规则"
+          echo "✅ 拉取上游源码并注入机型补丁 步骤完成"
 
       - name: 更新软件源并生成配置
         working-directory: ./openwrt
         run: |
           set -e
-          trap 'echo "❌ 更新软件源或生成配置失败"; exit 1' ERR
-          echo "==> 开始：更新并安装 feeds 软件源"
+          trap 'echo "❌ 更新软件源并生成配置 步骤失败"; exit 1' ERR
+          echo "==> 开始：更新软件源并生成配置"
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          echo "==> 导入 m302a.config 编译配置"
-          cp ../diy/m302a.config ./.config
-          echo "==> 执行 isos2.sh：软件源与插件后置处理"
+          echo "✅ feeds 更新安装完成，执行 isos2.sh"
           chmod +x ./isos2.sh && ./isos2.sh
-          echo "==> 执行 make defconfig 校验并补齐依赖配置"
+          echo "✅ isos2.sh 执行完成，导入 m302a 机型配置"
+          cp ../diy/m302a.config ./.config
+          echo "==== 导入配置后，检查目标架构 ===="
+          grep -E 'CONFIG_TARGET_|CONFIG_ARCH_PACKAGES' ./.config
           make defconfig
-          echo "✅ 软件源更新与配置生成完成"
+          echo "==== defconfig 补全依赖后再次校验 ===="
+          grep -E 'CONFIG_TARGET_|CONFIG_ARCH_PACKAGES' ./.config
+          echo "✅ 更新软件源并生成配置 步骤完成"
 
       - name: 预下载源码包
         working-directory: ./openwrt
         run: |
           set -e
-          trap 'echo "❌ 预下载源码包失败"; exit 1' ERR
-          echo "==> 开始：并行下载全部源码包"
+          trap 'echo "❌ 预下载源码包 步骤失败"; exit 1' ERR
+          echo "==> 开始：预下载源码包"
           make download -j$(nproc)
-          echo "==> 清理体积异常的空源码包"
           find dl -size -1024c -exec rm -f {} \;
-          echo "✅ 源码包预下载完成"
+          echo "✅ 预下载源码包 步骤完成"
 
       - name: 编译固件
         working-directory: ./openwrt
         run: |
           set -e
-          trap 'echo "❌ 固件编译失败"; exit 1' ERR
-          echo "==> 开始：正式编译固件（日志级别 V=s）"
+          trap 'echo "❌ 编译固件 步骤失败"; exit 1' ERR
+          echo "==> 开始：编译固件"
           date '+%Y%m%d%H' > version
           make -j$(nproc) V=s
-          echo "✅ 固件编译完成"
-          echo "==> 固件输出目录：openwrt/bin/targets/amlogic/meson/"
-          echo "==> 目录内固件文件如下："
-          ls -la bin/targets/amlogic/meson/
-          echo "==> 编译生成的镜像位置："
-          ls -1 bin/targets/amlogic/meson/*.img.gz 2>/dev/null || echo "（暂未发现 .img.gz 镜像，需确认打包脚本是否执行）"
+          echo "✅ make 编译完成"
+          echo "==== 固件输出根目录：openwrt/bin/targets/amlogic/meson/m302a/ ===="
+          ls -la bin/targets/amlogic/meson/m302a/ || echo "⚠️ 警告：m302a 固件目录不存在！"
+          echo "✅ 编译固件 步骤完成"
 
       - name: 整理固件产物
         id: prepare_artifacts
         run: |
           set -e
-          trap 'echo "❌ 整理固件产物失败"; exit 1' ERR
-          echo "==> 开始：整理固件与配置文件"
+          trap 'echo "❌ 整理固件产物 步骤失败"; exit 1' ERR
+          echo "==> 开始：整理固件产物"
           mkdir -p artifacts/${{ matrix.model }}
           cp openwrt/.config artifacts/${{ matrix.model }}/m302a.config
-          echo "==> 列出编译目录内全部产物"
-          ls -la openwrt/bin/targets/amlogic/meson/
-          IMG=$(ls openwrt/bin/targets/amlogic/meson/*.img.gz 2>/dev/null | head -n1)
-          if [ -z "$IMG" ]; then
-            echo "❌ 未找到 .img.gz 镜像文件，请确认打包脚本执行成功"
+          echo "✅ 已复制 .config"
+          echo "==== 查看 m302a 固件目录 ===="
+          ls -la openwrt/bin/targets/amlogic/meson/m302a/
+          IMG=$(ls openwrt/bin/targets/amlogic/meson/m302a/*.img.gz 2>/dev/null | head -n1)
+          if [ -z "$IMG" ];then
+            echo "❌ 错误：没有找到 sdcard.img.gz 镜像！"
             exit 1
           fi
           cp "${IMG}" artifacts/${{ matrix.model }}/immwrt-24.10-$(date '+%Y%m%d%H')-${{ matrix.model }}-s905l3b.img.gz
-          echo "✅ 固件产物整理完成"
+          echo "✅ 固件拷贝成功：${IMG}"
+          echo "✅ 整理固件产物 步骤完成"
 
       - name: 上传固件产物
         uses: actions/upload-artifact@main
