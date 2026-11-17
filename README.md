@@ -1,4 +1,4 @@
-# M302A（S905L3B）OpenWrt 固件编译资料
+[# M302A（S905L3B）OpenWrt 固件编译资料
 
 > 目标盒子：**魔百和 M302A / S905L3B**，非高安版本。
 > 本目录是一套可直接推到 GitHub 仓库、用 Actions 一键编译的完整资料。
@@ -118,3 +118,4 @@ ls /boot/dtb/amlogic/              # 核对 dtb：meson-gxl-s905l3b-m302a.dtb
 - ophub 内核：https://github.com/ophub/kernel
 - 设备数据库 `model_database.conf`（M302A 行：BOARD `s905l3b`）
 - OpenWrt armsr target：https://github.com/openwrt/openwrt
+](https://github.com/yangjianjun1/ImmWrt-s905l3b-B60av2.1.M/actions/workflows/Build_m302a.yml/badge.svg)
